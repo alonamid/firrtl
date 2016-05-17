@@ -18,11 +18,18 @@ object PadWidths extends Pass {
          case t: SIntType => SIntType(IntWidth(i))
          // default case should never be reached
       }
-      if (i > width(e))
+      if (i > width(e)) {
          DoPrim(Pad, Seq(e), Seq(i), tx)
-      else if (i < width(e))
-         DoPrim(Bits, Seq(e), Seq(i - 1, 0), tx)
-      else e
+      } else if (i < width(e)) {
+         val bits = DoPrim(Bits, Seq(e), Seq(i - 1, 0), UIntType(IntWidth(i)))
+         // Bit Select always returns UInt, cast if selecting from SInt
+         e.tpe match {
+            case UIntType(_) => bits
+            case SIntType(_) => DoPrim(AsSInt, Seq(bits), Seq.empty, SIntType(IntWidth(i)))
+         }
+      } else {
+        e
+      }
    }
    // Recursive, updates expression so children exp's have correct widths
    private def onExp(e: Expression): Expression = {
