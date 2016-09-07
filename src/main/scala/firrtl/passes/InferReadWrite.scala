@@ -27,7 +27,6 @@ MODIFICATIONS.
 
 package firrtl.passes
 
-import scala.collection.mutable.{ArrayBuffer, HashSet, HashMap}
 import com.typesafe.scalalogging.LazyLogging
 
 import firrtl._
@@ -48,66 +47,66 @@ case class InferReadWriteAnnotation(t: String, tID: TransID)
 // of any product term of the enable signal of the write port, then the readwrite
 // port is inferred.
 object InferReadWritePass extends Pass {
+  import collection.mutable.{ArrayBuffer, HashSet}
+  import WrappedExpression.weq
+  import Utils.{zero, one, BoolType}
+  import MemPortUtils.memPortField
+  import AnalysisUtils.{Connects, getConnects, getConnectOrigin}
+
   def name = "Infer ReadWrite Ports"
+  implicit def expToString(e: Expression) = e.serialize
 
-  def inferReadWrite(m: Module) = {
-    import AnalysisUtils._
-    import WrappedExpression.we
-    val connects = getConnects(m)
-    val repl = HashMap[String, Expression]()
-    val stmts = ArrayBuffer[Statement]()
-    val zero = we(UIntLiteral(0, IntWidth(1)))
-    val one = we(UIntLiteral(1, IntWidth(1)))
+  def getProductTerms(connects: Connects)(e: Expression): Seq[Expression] = e match {
+    // No ConstProp yet...
+    case Mux(cond, tval, fval, _) if weq(tval, one) && weq(fval, zero) =>
+      cond +: getProductTerms(connects)(connects(cond))
+    // Visit each term of AND operation
+    case DoPrim(And, args, consts, tpe) =>
+      e +: (args flatMap getProductTerms(connects))
+    // Visit connected nodes to references
+    case _: WRef | _: WSubField | _: WSubIndex =>
+      e +: (connects get e match {
+        case None => Nil
+        case Some(ex) => getProductTerms(connects)(ex)
+      })
+    // Otherwise just return itselt
+    case _ => Seq(e)
+  }
 
-    def getProductTermsFromExp(e: Expression): Seq[Expression] =
-      e match {
-        // No ConstProp yet...
-        case Mux(cond, tval, fval, _) if we(tval) == one && we(fval) == zero =>
-          cond +: getProductTerms(cond.serialize)
-        // Visit each term of AND operation
-        case DoPrim(op, args, consts, tpe) if op == And =>
-          e +: (args flatMap getProductTermsFromExp)
-        // Visit connected nodes to references
-        case _: WRef | _: SubField | _: SubIndex | _: SubAccess =>
-          e +: getProductTerms(e.serialize)
-        // Otherwise just return itselt
-        case _ =>
-          List(e)
-      }
+  def checkComplement(a: Expression, b: Expression) = (a, b) match {
+    // b ?= Not(a)
+    case (_, DoPrim(Not, args, _, _)) => weq(args.head, a)
+    // a ?= Not(b)
+    case (DoPrim(Not, args, _, _), _) => weq(args.head, b)
+    // b ?= Eq(a, 0) or b ?= Eq(0, a)
+    case (_, DoPrim(Eq, args, _, _)) =>
+      weq(args(0), a) && weq(args(1), zero) ||
+      weq(args(1), a) && weq(args(0), zero)
+    // a ?= Eq(b, 0) or b ?= Eq(0, a)
+    case (DoPrim(Eq, args, _, _), _) =>
+      weq(args(0), b) && weq(args(1), zero) ||
+      weq(args(1), b) && weq(args(0), zero)
+    case _ => false
+  }
 
-    def getProductTerms(node: String): Seq[Expression] =
-      if (connects contains node) getProductTermsFromExp(connects(node)) else Nil
-
-    def checkComplement(a: Expression, b: Expression) = (a, b) match {
-      // b ?= Not(a)
-      case (_, DoPrim(op, args, _, _)) if op == Not =>
-        args.head.serialize == a.serialize
-      // a ?= Not(b)
-      case (DoPrim(op, args, _, _), _) if op == Not =>
-        args.head.serialize == b.serialize
-      // b ?= Eq(a, 0) or b ?= Eq(0, a)
-      case (_, DoPrim(op, args, _, _)) if op == Eq =>
-        args(0).serialize == a.serialize && we(args(1)) == zero ||
-        args(1).serialize == a.serialize && we(args(0)) == zero
-      // a ?= Eq(b, 0) or b ?= Eq(0, a)
-      case (DoPrim(op, args, _, _), _) if op == Eq =>
-        args(0).serialize == b.serialize && we(args(1)) == zero ||
-        args(1).serialize == b.serialize && we(args(0)) == zero
-      case _ => false
-    }
-
-    def inferReadWrite(s: Statement): Statement = s map inferReadWrite match {
+  type Statements = collection.mutable.ArrayBuffer[Statement]
+  def inferReadWriteStmt(connects: Connects, repl: Connects, stmts: Statements)(s: Statement): Statement =
+    s map inferReadWriteStmt(connects, repl, stmts) match {
       // infer readwrite ports only for non combinational memories
       case mem: DefMemory if mem.readLatency > 0 =>
-        val bt = UIntType(IntWidth(1))
         val ut = UnknownType
         val ug = UNKNOWNGENDER
         val readers = HashSet[String]()
         val writers = HashSet[String]()
         val readwriters = ArrayBuffer[String]()
         for (w <- mem.writers ; r <- mem.readers) {
-          val wp = getProductTerms(s"${mem.name}.$w.en")
-          val rp = getProductTerms(s"${mem.name}.$r.en")
+          val rclk = memPortField(mem, r, "clk")
+          val wclk = memPortField(mem, w, "clk")
+          val ren = memPortField(mem, r, "en")
+          val wen = memPortField(mem, w, "en")
+          val wp = getProductTerms(connects)(wen)
+          val rp = getProductTerms(connects)(ren)
+          // TODO: compare two clks
           if (wp exists (a => rp exists (b => checkComplement(a, b)))) {
             val allPorts = (mem.readers ++ mem.writers ++ mem.readwriters ++ readwriters).toSet
             // Uniquify names by examining all ports of the memory
@@ -116,26 +115,30 @@ object InferReadWritePass extends Pass {
                 newName = s"rw_$idx"
                 if !allPorts(newName)
               } yield newName).head
-            val rw_exp = WSubField(WRef(mem.name, ut, MemKind, ug), rw, ut, ug)
+            val rwExp = WSubField(WRef(mem.name, ut, MemKind, ug), rw, ut, ug)
+            val raddr = memPortField(mem, r, "addr")
+            val rdata = memPortField(mem, r, "data")
+            val waddr = memPortField(mem, w, "addr")
+            val wdata = memPortField(mem, w, "data")
+            val wmask = memPortField(mem, w, "mask")
             readwriters += rw
             readers += r
             writers += w
-            repl(s"${mem.name}.$r.en")   = EmptyExpression
-            repl(s"${mem.name}.$r.clk")  = EmptyExpression
-            repl(s"${mem.name}.$r.addr") = EmptyExpression
-            repl(s"${mem.name}.$r.data") = WSubField(rw_exp, "rdata", mem.dataType, MALE)
-            repl(s"${mem.name}.$w.en")   = WSubField(rw_exp, "wmode", bt, FEMALE)
-            repl(s"${mem.name}.$w.clk")  = EmptyExpression
-            repl(s"${mem.name}.$w.addr") = EmptyExpression
-            repl(s"${mem.name}.$w.data") = WSubField(rw_exp, "wdata", mem.dataType, FEMALE)
-            repl(s"${mem.name}.$w.mask") = WSubField(rw_exp, "wmask", ut, FEMALE)
-            stmts += Connect(NoInfo, WSubField(rw_exp, "clk", ClockType, FEMALE),
-              WRef("clk", ClockType, NodeKind, MALE))
-            stmts += Connect(NoInfo, WSubField(rw_exp, "en", bt, FEMALE),
-              DoPrim(Or, List(connects(s"${mem.name}.$r.en"), connects(s"${mem.name}.$w.en")), Nil, bt))
-            stmts += Connect(NoInfo, WSubField(rw_exp, "addr", ut, FEMALE),
-              Mux(connects(s"${mem.name}.$w.en"), connects(s"${mem.name}.$w.addr"), 
-                  connects(s"${mem.name}.$r.addr"), ut))
+            repl(rclk) = EmptyExpression
+            repl(ren) = EmptyExpression
+            repl(raddr) = EmptyExpression
+            repl(rdata) = WSubField(rwExp, "rdata", mem.dataType, MALE)
+            repl(wclk) = WSubField(rwExp, "clk", ClockType, FEMALE)
+            repl(wen) = WSubField(rwExp, "wmode", BoolType, FEMALE)
+            repl(waddr) = EmptyExpression
+            repl(wdata) = WSubField(rwExp, "wdata", mem.dataType, FEMALE)
+            repl(wmask) = WSubField(rwExp, "wmask", wmask.tpe, FEMALE)
+            val en = DoPrim(Or, Seq(ren, wen), Nil, BoolType)
+            val addr = Mux(wen, connects(waddr), connects(raddr), waddr.tpe)
+            stmts ++= Seq(
+              Connect(NoInfo, WSubField(rwExp, "en", BoolType, FEMALE), en),
+              Connect(NoInfo, WSubField(rwExp, "addr", addr.tpe, FEMALE), addr)
+            )
           }
         }
         if (readwriters.isEmpty) mem else DefMemory(mem.info,
@@ -145,45 +148,49 @@ object InferReadWritePass extends Pass {
       case s => s
     }
 
-    def replaceExp(e: Expression): Expression =
-      e map replaceExp match {
-        case e: WSubField => repl getOrElse (e.serialize, e)
-        case e => e
-      }
+  def replaceExp(repl: Connects)(e: Expression): Expression =
+    e map replaceExp(repl) match {
+      case e: WSubField => repl getOrElse (e, e)
+      case e => e
+    }
 
-    def replaceStmt(s: Statement): Statement =
-      s map replaceStmt map replaceExp match {
-        case Connect(info, loc, exp) if loc == EmptyExpression => EmptyStmt 
-        case s => s
-      }
+  def replaceStmt(repl: Connects)(s: Statement): Statement =
+    s map replaceStmt(repl) map replaceExp(repl) match {
+      case Connect(_, EmptyExpression, _) => EmptyStmt
+      case s => s
+    }
     
-    Module(m.info, m.name, m.ports, Block((m.body map inferReadWrite map replaceStmt) +: stmts.toSeq))
+  def inferReadWrite(m: DefModule) = {
+    val connects = getConnects(m)
+    val repl = new Connects
+    val stmts = new Statements
+    (m map inferReadWriteStmt(connects, repl, stmts)
+       map replaceStmt(repl)) match {
+      case m: ExtModule => m
+      case m: Module => m copy (body = Block(m.body +: stmts))
+    }
   }
 
-  def run (c:Circuit) = Circuit(c.info, c.modules map {
-    case m: Module => inferReadWrite(m)
-    case m: ExtModule => m
-  }, c.main)
+  def run(c: Circuit) = c copy (modules = (c.modules map inferReadWrite))
 }
 
 // Transform input: Middle Firrtl. Called after "HighFirrtlToMidleFirrtl"
 // To use this transform, circuit name should be annotated with its TransId.
 class InferReadWrite(transID: TransID) extends Transform with LazyLogging {
-  def execute(circuit:Circuit, map: AnnotationMap) = 
-    map get transID match {
-      case Some(p) => p get CircuitName(circuit.main) match {
-        case Some(InferReadWriteAnnotation(_, _)) => TransformResult((Seq(
-          InferReadWritePass,
-          CheckInitialization,
-          ResolveKinds,
-          InferTypes,
-          ResolveGenders) foldLeft circuit){ (c, pass) =>
-            val x = Utils.time(pass.name)(pass run c)
-            logger debug x.serialize
-            x
-          }, None, Some(map))
-        case _ => TransformResult(circuit, None, Some(map))
-      }
+  def execute(circuit:Circuit, map: AnnotationMap) = map get transID match {
+    case Some(p) => p get CircuitName(circuit.main) match {
+      case Some(InferReadWriteAnnotation(_, _)) => TransformResult((Seq(
+        InferReadWritePass,
+        CheckInitialization,
+        ResolveKinds,
+        InferTypes,
+        ResolveGenders) foldLeft circuit){ (c, pass) =>
+          val x = Utils.time(pass.name)(pass run c)
+          logger debug x.serialize
+          x
+        }, None, Some(map))
       case _ => TransformResult(circuit, None, Some(map))
     }
+    case _ => TransformResult(circuit, None, Some(map))
+  }
 }
