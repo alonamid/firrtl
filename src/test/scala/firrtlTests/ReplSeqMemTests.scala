@@ -39,7 +39,8 @@ circuit Top :
       val circuit = InferTypes.run(ToWorkingIR.run(parse(input)))
       val m = circuit.modules.head.asInstanceOf[ir.Module]
       val connects = AnalysisUtils.getConnects(m)
-      val calculatedOrigin = AnalysisUtils.getConnectOrigin(connects,"f").serialize 
+      val calculatedOrigin = AnalysisUtils.getConnectOrigin(connects)(
+        Utils.create_exps("f", Utils.BoolType).head).serialize
       require(calculatedOrigin == origin, s"getConnectOrigin returns incorrect origin $calculatedOrigin !")
     }
 
