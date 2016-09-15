@@ -105,8 +105,8 @@ Optional Arguments:
       infoMode: InfoMode = IgnoreInfo,
       annotations: AnnotationMap = new AnnotationMap(Seq.empty)) = {
     val parsedInput = Parser.parse(Source.fromFile(input).getLines, infoMode)
-    val outputBuffer = new java.io.CharArrayWriter
-    compiler.compile(parsedInput, annotations, outputBuffer)
+    //val outputBuffer = new java.io.CharArrayWriter
+    compiler.compile(parsedInput, annotations/*, outputBuffer*/)
 	
 //ALON: I need to create the output file annotations in the AnnotationsMap instead of this!
 /*
