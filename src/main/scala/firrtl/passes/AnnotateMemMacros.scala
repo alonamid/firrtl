@@ -70,7 +70,8 @@ object AnalysisUtils {
       else e
     case DoPrim((PrimOps.AsUInt | PrimOps.AsSInt | PrimOps.AsClock), args, _, _) => 
       getOrigin(connects, args.head)
-    case _: WRef | _: SubField | _: SubIndex | _: SubAccess if connects contains e.serialize =>
+    // note: this should stop on a reg, but will stack overflow for combinational loops (not allowed)
+    case _: WRef | _: SubField | _: SubIndex | _: SubAccess if connects.contains(e.serialize) && kind(e) != RegKind =>
       getConnectOrigin(connects, e.serialize) 
     case _ => e
   }

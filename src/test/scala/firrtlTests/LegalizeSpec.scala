@@ -27,31 +27,12 @@ MODIFICATIONS.
 
 package firrtlTests
 
-import org.scalatest._
-import org.scalatest.prop._
+import firrtl._
 
-class IntegrationSpec extends FirrtlPropSpec {
+class LegalizeSpec extends FirrtlFlatSpec {
+  behavior of "Legalize"
 
-  case class Test(name: String, dir: String)
-
-  val runTests = Seq(Test("GCDTester", "/integration"),
-                     Test("RightShiftTester", "/integration"),
-                     Test("MemTester", "/integration"))
-      
-
-  runTests foreach { test =>
-    property(s"${test.name} should execute correctly") {
-      runFirrtlTest(test.name, test.dir)
-    }
-  }
-
-  val compileTests = Seq(Test("rocket", "/regress"),
-                         Test("rocket-firrtl", "/regress"),
-                         Test("Rob", "/regress"))
-
-  compileTests foreach { test =>
-    property(s"${test.name} should compile to Verilog") {
-      compileFirrtlTest(test.name, test.dir)
-    }
+  it should "compile and run" in {
+    runFirrtlTest("Legalize", "/passes/Legalize")
   }
 }

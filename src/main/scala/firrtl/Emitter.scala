@@ -53,7 +53,6 @@ object FIRRTLEmitter extends Emitter {
   def run(c: Circuit, w: Writer) = w.write(c.serialize)
 }
 
-case class VIndent()
 case class VRandom(width: BigInt) extends Expression {
   def tpe = UIntType(IntWidth(width))
   def nWords = (width + 31) / 32
@@ -85,11 +84,11 @@ class VerilogEmitter extends Emitter {
     else DoPrim(Eq, Seq(e.e1, zero), Nil, UIntType(IntWidth(1)))
   }
 
-  def wref(n: String, t: Type) = WRef(n, t, ExpKind(), UNKNOWNGENDER)
+  def wref(n: String, t: Type) = WRef(n, t, ExpKind, UNKNOWNGENDER)
   def remove_root(ex: Expression): Expression = ex match {
     case ex: WSubField => ex.exp match {
       case (e: WSubField) => remove_root(e)
-      case (_: WRef) => WRef(ex.name, ex.tpe, InstanceKind(), UNKNOWNGENDER)
+      case (_: WRef) => WRef(ex.name, ex.tpe, InstanceKind, UNKNOWNGENDER)
     }
     case _ => error("Shouldn't be here")
   }
@@ -112,10 +111,10 @@ class VerilogEmitter extends Emitter {
       case (e: Literal) => v_print(e)
       case (e: VRandom) => w write s"{${e.nWords}{$$random}}"
       case (t: UIntType) => 
-        val wx = long_BANG(t) - 1
+        val wx = bitWidth(t) - 1
         if (wx > 0) w write s"[$wx:0]"
       case (t: SIntType) => 
-        val wx = long_BANG(t) - 1
+        val wx = bitWidth(t) - 1
         if (wx > 0) w write s"[$wx:0]"
       case ClockType =>
       case (t: VectorType) => 
@@ -126,7 +125,7 @@ class VerilogEmitter extends Emitter {
       case (s: String) => w write s
       case (i: Int) => w write i.toString
       case (i: Long) => w write i.toString
-      case (t: VIndent) => w write "   "
+      case (i: BigInt) => w write i.toString
       case (s: Seq[Any]) =>
         s foreach (emit(_, top + 1))
         if (top == 0) w write "\n"
@@ -189,7 +188,7 @@ class VerilogEmitter extends Emitter {
        case Eq => Seq(cast_if(a0), " == ", cast_if(a1))
        case Neq => Seq(cast_if(a0), " != ", cast_if(a1))
        case Pad =>
-         val w = long_BANG(a0.tpe)
+         val w = bitWidth(a0.tpe)
          val diff = (c0 - w)
          if (w == 0) Seq(a0)
          else doprim.tpe match {
@@ -210,9 +209,9 @@ class VerilogEmitter extends Emitter {
        }
        case Shlw => Seq(cast(a0), " << ", c0)
        case Shl => Seq(cast(a0), " << ", c0)
-       case Shr if c0 >= long_BANG(a0.tpe) =>
+       case Shr if c0 >= bitWidth(a0.tpe) =>
          error("Verilog emitter does not support SHIFT_RIGHT >= arg width")
-       case Shr => Seq(a0,"[", long_BANG(a0.tpe) - 1, ":", c0, "]")
+       case Shr => Seq(a0,"[", bitWidth(a0.tpe) - 1, ":", c0, "]")
        case Neg => Seq("-{", cast(a0), "}")
        case Cvt => a0.tpe match {
          case (_: UIntType) => Seq("{1'b0,", cast(a0), "}")
@@ -222,24 +221,24 @@ class VerilogEmitter extends Emitter {
        case And => Seq(cast_as(a0), " & ", cast_as(a1))
        case Or => Seq(cast_as(a0), " | ", cast_as(a1))
        case Xor => Seq(cast_as(a0), " ^ ", cast_as(a1))
-       case Andr => (0 until long_BANG(doprim.tpe).toInt) map (
+       case Andr => (0 until bitWidth(doprim.tpe).toInt) map (
          Seq(cast(a0), "[", _, "]")) reduce (_ + " & " + _)
-       case Orr => (0 until long_BANG(doprim.tpe).toInt) map (
+       case Orr => (0 until bitWidth(doprim.tpe).toInt) map (
          Seq(cast(a0), "[", _, "]")) reduce (_ + " | " + _)
-       case Xorr => (0 until long_BANG(doprim.tpe).toInt) map (
+       case Xorr => (0 until bitWidth(doprim.tpe).toInt) map (
          Seq(cast(a0), "[", _, "]")) reduce (_ + " ^ " + _)
        case Cat => Seq("{", cast(a0), ",", cast(a1), "}")
        // If selecting zeroth bit and single-bit wire, just emit the wire
-       case Bits if c0 == 0 && c1 == 0 && long_BANG(a0.tpe) == 1 => Seq(a0)
+       case Bits if c0 == 0 && c1 == 0 && bitWidth(a0.tpe) == 1 => Seq(a0)
        case Bits if c0 == c1 => Seq(a0, "[", c0, "]")
        case Bits => Seq(a0, "[", c0, ":", c1, "]")
        case Head =>
-         val w = long_BANG(a0.tpe)
+         val w = bitWidth(a0.tpe)
          val high = w - 1
          val low = w - c0
          Seq(a0, "[", high, ":", low, "]")
        case Tail =>
-         val w = long_BANG(a0.tpe)
+         val w = bitWidth(a0.tpe)
          val low = w - c0 - 1
          Seq(a0, "[", low, ":", 0, "]")
      }
@@ -260,7 +259,7 @@ class VerilogEmitter extends Emitter {
           simlist += s
           s
         case (s: DefNode) =>
-          val e = WRef(s.name, get_type(s), NodeKind(), MALE)
+          val e = WRef(s.name, s.value.tpe, NodeKind, MALE)
           netlist(e) = s.value
           s
         case (s) => s
@@ -350,11 +349,11 @@ class VerilogEmitter extends Emitter {
       // Then, return the correct number of bits selected from the random value
       def rand_string(t: Type) : Seq[Any] = {
          val nx = namespace.newTemp
-         val rand = VRandom(long_BANG(t))
+         val rand = VRandom(bitWidth(t))
          val tx = SIntType(IntWidth(rand.realWidth))
          declare("reg",nx, tx)
-         initials += Seq(wref(nx, tx), " = ", VRandom(long_BANG(t)), ";")
-         Seq(nx, "[", long_BANG(t) - 1, ":0]")
+         initials += Seq(wref(nx, tx), " = ", VRandom(bitWidth(t)), ";")
+         Seq(nx, "[", bitWidth(t) - 1, ":0]")
       }
 
       def initialize(e: Expression) = {
@@ -433,7 +432,7 @@ class VerilogEmitter extends Emitter {
             portdefs += Seq(p.direction, "  ", p.tpe, " ", p.name)
           case Output =>
             portdefs += Seq(p.direction, " ", p.tpe, " ", p.name)
-            val ex = WRef(p.name, p.tpe, PortKind(), FEMALE)
+            val ex = WRef(p.name, p.tpe, PortKind, FEMALE)
             assign(ex, netlist(ex))
         }
       }
@@ -457,7 +456,7 @@ class VerilogEmitter extends Emitter {
           s
         case (s: DefNode) =>
           declare("wire", s.name, s.value.tpe)
-          assign(WRef(s.name, s.value.tpe, NodeKind(), MALE), s.value)
+          assign(WRef(s.name, s.value.tpe, NodeKind, MALE), s.value)
           s
         case (s: Stop) =>
           val errorString = StringLit(s"${s.ret}\n".getBytes)
@@ -467,12 +466,11 @@ class VerilogEmitter extends Emitter {
           simulate(s.clk, s.en, printf(s.string, s.args), Some("PRINTF_COND"))
           s
         case (s: WDefInstance) =>
-          val es = create_exps(WRef(s.name, s.tpe, InstanceKind(), MALE))
+          val es = create_exps(WRef(s.name, s.tpe, InstanceKind, MALE))
           instantiate(s.name, s.module, es)
           s
         case (s: DefMemory) =>
-          val mem = WRef(s.name, get_type(s),
-            MemKind(s.readers ++ s.writers ++ s.readwriters), UNKNOWNGENDER)
+          val mem = WRef(s.name, MemPortUtils.memType(s), MemKind, UNKNOWNGENDER)
           def mem_exp (p: String, f: String) = {
             val t1 = field_type(mem.tpe, p)
             val t2 = field_type(t1, f)

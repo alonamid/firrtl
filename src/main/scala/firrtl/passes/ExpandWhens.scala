@@ -53,7 +53,7 @@ object ExpandWhens extends Pass {
   // ========== Expand When Utilz ==========
   private def getFemaleRefs(n: String, t: Type, g: Gender): Seq[Expression] = {
     def getGender(t: Type, i: Int, g: Gender): Gender = times(g, get_flip(t, i, Default))
-    val exps = create_exps(WRef(n, t, ExpKind(), g))
+    val exps = create_exps(WRef(n, t, ExpKind, g))
     (exps.zipWithIndex foldLeft Seq[Expression]()){
       case (expsx, (exp, j)) => getGender(t, j, g) match {
         case (BIGENDER | FEMALE) => expsx :+ exp
@@ -63,7 +63,7 @@ object ExpandWhens extends Pass {
   }
   private def expandNetlist(netlist: Netlist) =
     netlist map {
-      case (k, WInvalid()) => IsInvalid(NoInfo, k.e1)
+      case (k, WInvalid) => IsInvalid(NoInfo, k.e1)
       case (k, v) => Connect(NoInfo, k.e1, v)
     }
   // Searches nested scopes of defaults for lvalue
@@ -80,9 +80,9 @@ object ExpandWhens extends Pass {
   }
 
   private def AND(e1: Expression, e2: Expression) =
-    DoPrim(And, Seq(e1, e2), Nil, UIntType(IntWidth(1)))
+    DoPrim(And, Seq(e1, e2), Nil, BoolType)
   private def NOT(e: Expression) =
-    DoPrim(Eq, Seq(e, zero), Nil, UIntType(IntWidth(1)))
+    DoPrim(Eq, Seq(e, zero), Nil, BoolType)
 
   // ------------ Pass -------------------
   def run(c: Circuit): Circuit = {
@@ -97,7 +97,7 @@ object ExpandWhens extends Pass {
                       p: Expression)
                       (s: Statement): Statement = s match {
         case w: DefWire =>
-          netlist ++= (getFemaleRefs(w.name, w.tpe, BIGENDER) map (ref => we(ref) -> WVoid()))
+          netlist ++= (getFemaleRefs(w.name, w.tpe, BIGENDER) map (ref => we(ref) -> WVoid))
           w
         case r: DefRegister =>
           netlist ++= (getFemaleRefs(r.name, r.tpe, BIGENDER) map (ref => we(ref) -> ref))
@@ -106,7 +106,7 @@ object ExpandWhens extends Pass {
           netlist(c.loc) = c.expr
           EmptyStmt
         case c: IsInvalid =>
-          netlist(c.expr) = WInvalid()
+          netlist(c.expr) = WInvalid
           EmptyStmt
         case s: Conditionally =>
           val conseqNetlist = new Netlist
@@ -127,9 +127,9 @@ object ExpandWhens extends Pass {
                 val trueValue = conseqNetlist getOrElse (lvalue, defaultValue)
                 val falseValue = altNetlist getOrElse (lvalue, defaultValue)
                 (trueValue, falseValue) match {
-                  case (WInvalid(), WInvalid()) => WInvalid()
-                  case (WInvalid(), fv) => ValidIf(NOT(s.pred), fv, fv.tpe)
-                  case (tv, WInvalid()) => ValidIf(s.pred, tv, tv.tpe)
+                  case (WInvalid, WInvalid) => WInvalid
+                  case (WInvalid, fv) => ValidIf(NOT(s.pred), fv, fv.tpe)
+                  case (tv, WInvalid) => ValidIf(s.pred, tv, tv.tpe)
                   case (tv, fv) => Mux(s.pred, tv, fv, mux_type_and_widths(tv, fv))
                 }
               case None =>
@@ -140,12 +140,12 @@ object ExpandWhens extends Pass {
             res match {
               case _: ValidIf | _: Mux | _: DoPrim => nodes get res match {
                 case Some(name) =>
-                  netlist(lvalue) = WRef(name, res.tpe, NodeKind(), MALE)
+                  netlist(lvalue) = WRef(name, res.tpe, NodeKind, MALE)
                   EmptyStmt
                 case None =>
                   val name = namespace.newTemp
                   nodes(res) = name
-                  netlist(lvalue) = WRef(name, res.tpe, NodeKind(), MALE)
+                  netlist(lvalue) = WRef(name, res.tpe, NodeKind, MALE)
                   DefNode(s.info, name, res)
               }
               case _ =>
@@ -165,7 +165,7 @@ object ExpandWhens extends Pass {
       val netlist = new Netlist
       // Add ports to netlist
       netlist ++= (m.ports flatMap { case Port(_, name, dir, tpe) =>
-        getFemaleRefs(name, tpe, to_gender(dir)) map (ref => we(ref) -> WVoid())
+        getFemaleRefs(name, tpe, to_gender(dir)) map (ref => we(ref) -> WVoid)
       })
       (netlist, simlist, expandWhens(netlist, Seq(netlist), one)(m.body))
     }

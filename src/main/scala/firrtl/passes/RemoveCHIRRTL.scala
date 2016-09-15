@@ -88,7 +88,7 @@ object RemoveCHIRRTL extends Pass {
       refs: DataRefMap, raddrs: AddrMap)(s: Statement): Statement = s match {
     case (s: CDefMemory) =>
       types(s.name) = s.tpe
-      val taddr = UIntType(IntWidth(math.max(1, ceil_log2(s.size))))
+      val taddr = UIntType(IntWidth(1 max ceilLog2(s.size)))
       val tdata = s.tpe
       def set_poison(vec: Seq[MPort], addr: String) = vec flatMap (r => Seq(
         IsInvalid(s.info, SubField(SubField(Reference(s.name, ut), r.name, ut), addr, taddr)),
@@ -101,7 +101,7 @@ object RemoveCHIRRTL extends Pass {
         Connect(s.info, SubField(SubField(Reference(s.name, ut), r.name, ut), wmode, taddr), zero)
       )
       def set_write (vec: Seq[MPort], data: String, mask: String) = vec flatMap {r =>
-        val tmask = create_mask(s.tpe)
+        val tmask = createMask(s.tpe)
         IsInvalid(s.info, SubField(SubField(Reference(s.name, ut), r.name, ut), data, tdata)) +:
              (create_exps(SubField(SubField(Reference(s.name, ut), r.name, ut), mask, tmask))
                map (Connect(s.info, _, zero))
@@ -160,7 +160,7 @@ object RemoveCHIRRTL extends Pass {
     e map get_mask(refs) match {
       case e: Reference => refs get e.name match {
         case None => e
-        case Some(p) => SubField(p.exp, p.mask, create_mask(e.tpe))
+        case Some(p) => SubField(p.exp, p.mask, createMask(e.tpe))
       }
       case e => e
     }
@@ -174,7 +174,7 @@ object RemoveCHIRRTL extends Pass {
         case Some(p) => g match {
           case FEMALE =>
             has_write_mport = true
-            if (p.rdwrite) has_readwrite_mport = Some(SubField(p.exp, "wmode", UIntType(IntWidth(1))))
+            if (p.rdwrite) has_readwrite_mport = Some(SubField(p.exp, "wmode", BoolType))
             SubField(p.exp, p.female, tpe)
           case MALE =>
             SubField(p.exp, p.male, tpe)
@@ -195,6 +195,8 @@ object RemoveCHIRRTL extends Pass {
       case DefNode(info, name, value) =>
         val valuex = remove_chirrtl_e(MALE)(value)
         val sx = DefNode(info, name, valuex)
+        // Check node is used for read port address
+        remove_chirrtl_e(FEMALE)(Reference(name, value.tpe))
         has_read_mport match {
           case None => sx
           case Some(en) => Block(Seq(sx, Connect(info, en, one)))
