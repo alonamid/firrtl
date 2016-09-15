@@ -140,7 +140,12 @@ class MiddleFirrtlToLowFirrtl () extends Transform with SimpleRun {
 //  renames names that conflict with Verilog keywords.
 // Operates on working IR nodes.
 // TODO(izraelevitz): Create RenameMap from VerilogRename
-class EmitVerilogFromLowFirrtl (val writer: Writer) extends Transform with SimpleRun {
+//ALON: old----------------------------------------------
+//class EmitVerilogFromLowFirrtl (val writer: Writer) extends Transform with SimpleRun {
+//---------------------------------------------------------
+
+
+class EmitVerilogFromLowFirrtl () extends Transform with SimpleRun {
    val passSeq = Seq(
       passes.RemoveValidIf,
       passes.ConstProp,
@@ -152,17 +157,87 @@ class EmitVerilogFromLowFirrtl (val writer: Writer) extends Transform with Simpl
       passes.DeadCodeElimination,
       passes.VerilogRename)
    def execute (circuit: Circuit, annotationMap: AnnotationMap): TransformResult = {
-      val result = run(circuit, passSeq)
-      (new VerilogEmitter).run(result.circuit, writer)
-      result
+	   annotationMap.get(transID) match {
+           case None => TransformResult(circuit, None, None)
+		   case Some(map) => {
+		           //def writer = annotationMap.get(transID)
+				   val fileNamesCircuitsMap = mutable.map[String, mutable.HashSet[CircuitName]()]()
+				   val fileNamesModulesMap = mutable.map[String, mutable.HashSet[ModuleName]()]()
+				   map.values.foreach {x: Annotation => x match {
+				   case OutputFileAnnotation(CircuitName(cir), _, output_fname)  => fileNamesCircuitsMap(output_fname) += CircuitName(cir)
+                   case OutputFileAnnotation(ModuleName(mod, cir), _, output_fname)  => fileNamesModulesMap(output_fname) += ModuleName(mod, cir)
+                   case _ => throw new PassException("Annotation must be OutputFileAnnotation")
+                   }}
+				   //handle the case of one verlilog file: just one output for one circuit.
+				   fileNamesCircuitsMap.keys.foreach {output_filename: String => output_filename match {
+						case String => {
+						    //create buffer and open the output file
+							val outputBuffer = new java.io.CharArrayWriter
+							val outputFile = new java.io.PrintWriter(output_filename)
+							//for each circuit (there should be only 1!!!), write to the buffer and than to the file
+							fileNamesCircuitsMap(output_filename).foreach {circuit: CircuitName => 							
+								val result = run(circuit, passSeq)
+								(new VerilogEmitter).run(result.circuit, outputBuffer)
+								outputFile.write(outputBuffer.toString)					
+							}
+							//when finished with all the circuits (there should be only 1), close the file
+							outputFile.close()	
+						}
+						case _ => throw new PassException("Problem matching output file name and toplevel circuit")
+				   }}
+				   	//Now need to handle the case of separate modules. This might require to go inside the emitter
+				   }
+				   result
+				   	
+		   }
+		 
+
    }
 }
 
+
+
 // Emits Firrtl.
 // Operates on WIR/IR nodes.
-class EmitFirrtl (val writer: Writer) extends Transform {
+class EmitFirrtl (/*val writer: Writer*/) extends Transform {
    def execute (circuit: Circuit, annotationMap: AnnotationMap): TransformResult = {
+   /*
       FIRRTLEmitter.run(circuit, writer)
+	  
+	  val outputFile = new java.io.PrintWriter(????something.output?????)
+      outputFile.write(outputBuffer.toString)
+      outputFile.close()
+	 */ 
+	 annotationMap.get(transID) match {
+           case None => TransformResult(circuit, None, None)
+		   case Some(map) => {
+		           //def writer = annotationMap.get(transID)
+				   val fileNamesCircuitsMap = mutable.map[String, mutable.HashSet[CircuitName]()]()
+				   val fileNamesModulesMap = mutable.map[String, mutable.HashSet[ModuleName]()]()
+				   map.values.foreach {x: Annotation => x match {
+				   case OutputFileAnnotation(CircuitName(cir), _, output_fname)  => fileNamesCircuitsMap(output_fname) += CircuitName(cir)
+                   case OutputFileAnnotation(ModuleName(mod, cir), _, output_fname)  => fileNamesModulesMap(output_fname) += ModuleName(mod, cir)
+                   case _ => throw new PassException("Annotation must be OutputFileAnnotation")
+                   }}
+				   //handle the case of one verlilog file: just one output for one circuit.
+				   fileNamesCircuitsMap.keys.foreach {output_filename: String => output_filename match {
+						case String => {
+						    //create buffer and open the output file
+							val outputBuffer = new java.io.CharArrayWriter
+							val outputFile = new java.io.PrintWriter(output_filename)
+							//for each circuit (there should be only 1!!!), write to the buffer and than to the file
+							fileNamesCircuitsMap(output_filename).foreach {circuit: CircuitName => 							
+								(new FIRRTLEmitter).run(circuit, outputBuffer)
+								(new VerilogEmitter).run(result.circuit, outputBuffer)
+								outputFile.write(outputBuffer.toString)					
+							}
+							//when finished with all the circuits (there should be only 1), close the file
+							outputFile.close()	
+						}
+						case _ => throw new PassException("Problem matching output file name and toplevel circuit")
+				   }}
+				   	//Now need to handle the case of separate modules. This might require to go inside the emitter
+				   } 
       TransformResult(circuit)
    }
 }
@@ -192,7 +267,7 @@ class LowFirrtlCompiler extends Compiler {
       new passes.InferReadWrite(TransID(-1)),
       new passes.ReplSeqMem(TransID(-2)),
       new MiddleFirrtlToLowFirrtl(),
-      new EmitFirrtl(writer)
+      new EmitFirrtl(TransID(-3))
    )
 }
 
@@ -207,6 +282,6 @@ class VerilogCompiler extends Compiler {
       new passes.ReplSeqMem(TransID(-2)),
       new MiddleFirrtlToLowFirrtl(),
       new passes.InlineInstances(TransID(0)),
-      new EmitVerilogFromLowFirrtl(writer)
+      new EmitVerilogFromLowFirrtl(TransID(-3))
    )
 }

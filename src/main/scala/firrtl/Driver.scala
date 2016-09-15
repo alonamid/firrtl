@@ -107,10 +107,29 @@ Optional Arguments:
     val parsedInput = Parser.parse(Source.fromFile(input).getLines, infoMode)
     val outputBuffer = new java.io.CharArrayWriter
     compiler.compile(parsedInput, annotations, outputBuffer)
-
+	
+//ALON: I need to create the output file annotations in the AnnotationsMap instead of this!
+/*
     val outputFile = new java.io.PrintWriter(output)
     outputFile.write(outputBuffer.toString)
     outputFile.close()
+*/
+case class OutputFileAnnotation(target: Named, tID: TransID, filename_: String) extends Annotation with Loose with Unstable {
+  def filename: String = filename_;
+  def duplicate(n: Named) = this.copy(target=n)
+}
+
+OutputFileAnnotation(circuit, TransID(-3), output)
+//first get the default output file to work. then handle the optional flag for several output files for different modules
+/*
+def handleOutputFile(value: String): Annotation =
+      value.split(':') match {
+        case _ => throw new Exception(s"Bad Verilog output file name: $value" + usage)
+      }
+*/
+
+
+
   }
 
   /**

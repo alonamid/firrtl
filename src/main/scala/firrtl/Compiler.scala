@@ -65,9 +65,9 @@ case class CompilerResult (circuit: Circuit, annotationMap: AnnotationMap)
 // - Call compile to executes each transformation in sequence onto
 //    a given circuit.
 trait Compiler {
-   def transforms(w: Writer): Seq[Transform]
-   def compile(circuit: Circuit, annotationMap: AnnotationMap, writer: Writer): CompilerResult = {
-      transforms(writer).foldLeft(CompilerResult(circuit,annotationMap))((in: CompilerResult, xform: Transform) => {
+   def transforms(/*w: Writer*/): Seq[Transform]
+   def compile(circuit: Circuit, annotationMap: AnnotationMap/*, writer: Writer*/): CompilerResult = {
+      transforms(/*writer*/).foldLeft(CompilerResult(circuit,annotationMap))((in: CompilerResult, xform: Transform) => {
          val result = xform.execute(in.circuit,in.annotationMap)
          val remappedAnnotations: Seq[Annotation] = result.renames match {
             case Some(RenameMap(rmap)) => {
